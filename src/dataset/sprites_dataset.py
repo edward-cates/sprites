@@ -36,6 +36,7 @@ class SpritesDataset:
         right_photo = self._image_transforms(
             Image.open(f"data/retro-pixel-characters-generator/data/data/3/{img_idx}.png").convert("RGB"),
         )
+        # Make T=8 to fit properly into the autoencoder.
         video = torch.stack([
             left_photo,
             left_photo,

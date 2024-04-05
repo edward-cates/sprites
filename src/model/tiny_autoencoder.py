@@ -45,6 +45,8 @@ class TinyAutoencoder(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
+        # Other shapes might not get reconstructed with exact same dimensions (#TODO)
+        assert x.shape[1:] == (3, 8, 64, 64), f"Expected (B, 3, 8, 64, 64) but got {x.shape}"
         x = self.encoder(x)
         x = self.decoder(x)
         x = self.sigmoid(x)
