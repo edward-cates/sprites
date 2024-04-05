@@ -1,0 +1,8 @@
+kaggle
+torch==2.2.2
+torchvision==0.17.2
+torchmetrics==1.3.2
+wandb
+pillow==10.3.0
+tqdm
+diffusers==0.27.2
