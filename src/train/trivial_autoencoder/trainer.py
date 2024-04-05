@@ -6,6 +6,7 @@ import wandb
 import torch
 from torchmetrics.image import StructuralSimilarityIndexMeasure as SSIM
 from tqdm import tqdm
+from einops import rearrange
 
 from src.dataset.sprites_dataset import SpritesDataset
 from src.loss.vgg_perceptual_loss import VGGPerceptualLoss
@@ -20,7 +21,7 @@ class Trainer:
         self.model = model.to(args.device)
         self.args = args
 
-        train_set, test_set = dataset.split(0.8)
+        train_set, test_set = dataset.randomly_split(0.9)
         self.train_loader = torch.utils.data.DataLoader(train_set, batch_size=self.args.batch_size, shuffle=True)
         self.test_loader = torch.utils.data.DataLoader(test_set, batch_size=self.args.batch_size, shuffle=False)
 
@@ -48,7 +49,10 @@ class Trainer:
     # Private
 
     def _initialize_ssim(self) -> Callable:
-        ssim = SSIM(data_range=1.0).to(self.args.device)
+        ssim = SSIM(
+            data_range=1.0,
+            kernel_size=5,
+        ).to(self.args.device)
         self.losses["ssim"] = lambda output, target: 1.0 - ssim(output, target)
 
     def _initialize_perc_loss(self) -> Callable:
@@ -72,7 +76,7 @@ class Trainer:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.gradient_clip)
             self.optimizer.step()
 
-            pbar.set_postfix({"Loss": loss.item(), f"{wandb.run.name} Train Step": step})
+            pbar.set_postfix({"Loss": loss.item(), f"({wandb.run.name}) Train Step": step})
             total_loss += loss.item()
             count += 1
         
@@ -91,33 +95,59 @@ class Trainer:
                 y = self.model(x)
                 loss = self._calc_loss(output=y, target=x)
 
-                pbar.set_postfix({"Loss": loss.item(), f"{wandb.run.name} Test Step": step})
+                pbar.set_postfix({"Loss": loss.item(), f"({wandb.run.name}) Test Step": step})
                 total_loss += loss.item()
                 count += 1
 
-        print(f"Test loss epoch: {total_loss / count}")
-        wandb.log({"test_loss_epoch": total_loss / count}, step=step)
+            print(f"Test loss epoch: {total_loss / count}")
+            wandb.log({"test_loss_epoch": total_loss / count}, step=step)
 
-        if step % 10 == 0:
-            # Pick 3 random images from the test set and log the input and output.
-            x = torch.stack([
-                self.test_loader.dataset.get_random_image()
-                for _ in range(3)
-            ]).to(self.args.device)
-            y = self.model(x)
+            if step % 10 == 0:
+                # Pick 3 random images from the test set and log the input and output.
+                x = torch.stack([
+                    self.test_loader.dataset.get_random_image()
+                    for _ in range(3)
+                ]).to(self.args.device)
+                y = self.model(x)
 
-            wandb.log({
-                "input_images": [wandb.Image(img) for img in x.cpu()],
-                "output_images": [wandb.Image(img) for img in y.cpu()],
-            }, step=step)
+                wandb.log({
+                    "input_images": [wandb.Video(self._prep_vid_for_wandb(img)) for img in x.cpu()],
+                    "output_images": [wandb.Video(self._prep_vid_for_wandb(img)) for img in y.cpu()],
+                }, step=step)
 
-            # Save checkpoint to disk.
-            checkpoint_dir = Path("checkpoints") / wandb.run.name
-            checkpoint_dir.mkdir(exist_ok=True, parents=True)
-            torch.save(self.model.state_dict(), str(checkpoint_dir / f"checkpoint_at_step_{step}.pth"))
+                # Save checkpoint to disk.
+                checkpoint_dir = Path("checkpoints") / wandb.run.project / wandb.run.name
+                checkpoint_dir.mkdir(exist_ok=True, parents=True)
+                torch.save(self.model.state_dict(), str(checkpoint_dir / f"checkpoint_at_step_{step}.pth"))
 
     def _calc_loss(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        assert target.shape[1:] == (3, 8, 64, 64), f"Expected (B, 3, 8, 64, 64) but got {output.shape}"
+        frame_losses = sum([
+            self._calc_frame_loss(output[:, :, i], target[:, :, i])
+            for i in range(8)
+        ])
+        transition_losses = sum([
+            self._calc_transition_loss(
+                output[:, :, i + 1] - output[:, :, i],
+                target[:, :, i + 1] - target[:, :, i],
+            )
+            for i in range(7)
+        ])
+        return frame_losses + transition_losses
+
+    def _calc_frame_loss(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         return sum([
             self.losses[loss](output, target)
             for loss in self.args.loss_type.split(",")
         ])
+
+    def _calc_transition_loss(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return self.losses["mse"](output, target)
+
+    @staticmethod
+    def _prep_vid_for_wandb(vid: torch.Tensor) -> torch.Tensor:
+        assert vid.shape == (3, 8, 64, 64), f"Expected (8, 3, 64, 64) but got {vid.shape}"
+        vid = rearrange(vid, "c t h w -> t c h w")
+        vid = (vid * 255).to(torch.uint8)
+        return vid
+

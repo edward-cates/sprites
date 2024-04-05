@@ -24,11 +24,6 @@ if __name__ == '__main__':
         for loss in args.loss_type.split(",")
     ]), f"Loss type must be one of {Trainer.losses.keys()}"
 
-    wandb.init(project="sprites_trivial-autoencoder")
-    wandb.config.update(args)
-
-    print(f"This run is named {wandb.run.name}.")
-
     model = TinyAutoencoder()
     if args.checkpoint is not None:
         assert Path(args.checkpoint).exists(), f"Checkpoint {args.checkpoint} not found"
@@ -37,6 +32,12 @@ if __name__ == '__main__':
     else:
         print("No checkpoint loaded, starting from scratch.")
     dataset = SpritesDataset()
+
+    wandb.init(project="sprites_tiny-autoencoder_video")
+    wandb.config.update(args)
+    print(f"This run is named {wandb.run.name}.")
+
     trainer = Trainer(model=model, dataset=dataset, args=args)
 
     trainer.train() # Infinite.
+

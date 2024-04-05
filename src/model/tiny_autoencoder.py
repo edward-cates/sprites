@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 def conv(n_in, n_out, **kwargs):
-    return nn.Conv2d(n_in, n_out, 3, padding=1, **kwargs)
+    return nn.Conv3d(n_in, n_out, 3, padding=1, **kwargs)
 
 class Clamp(nn.Module):
     def forward(self, x):
@@ -14,7 +14,7 @@ class Block(nn.Module):
     def __init__(self, n_in, n_out):
         super().__init__()
         self.conv = nn.Sequential(conv(n_in, n_out), nn.ReLU(), conv(n_out, n_out), nn.ReLU(), conv(n_out, n_out))
-        self.skip = nn.Conv2d(n_in, n_out, 1, bias=False) if n_in != n_out else nn.Identity()
+        self.skip = nn.Conv3d(n_in, n_out, 1, bias=False) if n_in != n_out else nn.Identity()
         self.fuse = nn.ReLU()
     def forward(self, x):
         return self.fuse(self.conv(x) + self.skip(x))
@@ -54,7 +54,7 @@ if __name__ == "__main__":
     model = TinyAutoencoder()
     print(model)
 
-    x = torch.randn(1, 3, 64, 64)
+    x = torch.randn(1, 3, 8, 64, 64)
     y = model(x)
     assert x.shape == y.shape, f"{x.shape} != {y.shape}"
     print("Success!")
