@@ -10,3 +10,4 @@ opencv-python==4.9.0.80
 einops==0.7.0
 moviepy==1.0.3
 imageio==2.34.0
+matplotlib

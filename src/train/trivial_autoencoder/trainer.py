@@ -102,7 +102,7 @@ class Trainer:
             print(f"Test loss epoch: {total_loss / count}")
             wandb.log({"test_loss_epoch": total_loss / count}, step=step)
 
-            if step % 10 == 0:
+            if step % 40 == 0:
                 # Pick 3 random images from the test set and log the input and output.
                 x = torch.stack([
                     self.test_loader.dataset.get_random_image()
