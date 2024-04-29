@@ -7,12 +7,13 @@ import torch
 from src.model.trivial_autoencoder import TrivialAutoencoder
 from src.model.tiny_autoencoder import TinyAutoencoder
 from src.dataset.sprites_dataset import SpritesDataset
+from src.dataset.flying_mnist_dataset import FlyingMnistDataset
 from src.train.trivial_autoencoder.trainer import Trainer
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--batch_size", "-b", type=int, default=64)
+    parser.add_argument("--batch_size", "-b", type=int, default=2)
     parser.add_argument("--learning_rate", "-r", type=float, default=1e-4)
     parser.add_argument("--gradient_clip", "-c", type=float, default=1.0)
     parser.add_argument("--checkpoint", "-m", type=str, default=None)
@@ -31,13 +32,23 @@ if __name__ == '__main__':
         model.load_state_dict(torch.load(args.checkpoint))
     else:
         print("No checkpoint loaded, starting from scratch.")
-    dataset = SpritesDataset()
 
-    wandb.init(project="sprites_tiny-autoencoder_video")
+    # dataset = SpritesDataset()
+    # train_dataset, test_dataset = dataset.randomly_split(0.9)
+
+    train_dataset = FlyingMnistDataset("train")
+    test_dataset = FlyingMnistDataset("val")
+
+    wandb.init(project="flying-mnist_tiny-autoencoder_video")
     wandb.config.update(args)
     print(f"This run is named {wandb.run.name}.")
 
-    trainer = Trainer(model=model, dataset=dataset, args=args)
+    trainer = Trainer(
+        model=model,
+        train_dataset=train_dataset,
+        test_dataset=test_dataset,
+        args=args,
+    )
 
     trainer.train() # Infinite.
 

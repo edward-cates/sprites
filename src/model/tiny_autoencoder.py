@@ -46,7 +46,6 @@ class TinyAutoencoder(nn.Module):
 
     def forward(self, x):
         # Other shapes might not get reconstructed with exact same dimensions (#TODO)
-        assert x.shape[1:] == (3, 8, 64, 64), f"Expected (B, 3, 8, 64, 64) but got {x.shape}"
         x = self.encoder(x)
         x = self.decoder(x)
         x = self.sigmoid(x)
@@ -56,8 +55,12 @@ if __name__ == "__main__":
     model = TinyAutoencoder()
     print(model)
 
-    x = torch.randn(1, 3, 8, 64, 64)
-    y = model(x)
+    device = "cuda:0"
+    model.to(device)
+
+    # x = torch.randn(1, 3, 8, 64, 64)
+    x = torch.randn(1, 3, 16, 256, 256)
+    y = model(x.to(device))
     assert x.shape == y.shape, f"{x.shape} != {y.shape}"
     print("Success!")
 

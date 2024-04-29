@@ -1,5 +1,6 @@
+import random
 from argparse import Namespace
-from typing import Callable
+from typing import Callable, Iterable
 from pathlib import Path
 
 import wandb
@@ -15,15 +16,15 @@ class Trainer:
     def __init__(
             self,
             model: torch.nn.Module,
-            dataset: SpritesDataset,
+            train_dataset: Iterable,
+            test_dataset: Iterable,
             args: Namespace,
     ):
         self.model = model.to(args.device)
         self.args = args
 
-        train_set, test_set = dataset.randomly_split(0.9)
-        self.train_loader = torch.utils.data.DataLoader(train_set, batch_size=self.args.batch_size, shuffle=True)
-        self.test_loader = torch.utils.data.DataLoader(test_set, batch_size=self.args.batch_size, shuffle=False)
+        self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.args.batch_size, shuffle=True)
+        self.test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=self.args.batch_size, shuffle=False)
 
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.args.learning_rate)
         if "ssim" in self.args.loss_type:
@@ -32,6 +33,9 @@ class Trainer:
             self._initialize_perc_loss()
 
     def train(self):
+        # Sanity check the data.
+        self._log_sample_data()
+
         step = 0
         while True:
             self._train(step=step)
@@ -68,6 +72,11 @@ class Trainer:
         for batch in pbar:
             self.optimizer.zero_grad()
 
+            batch = torch.stack([
+                self._remove_random_frame(vid)
+                for vid in batch
+            ])
+
             x = batch.to(self.args.device)
             y = self.model(x)
             loss = self._calc_loss(output=y, target=x)
@@ -102,10 +111,10 @@ class Trainer:
             print(f"Test loss epoch: {total_loss / count}")
             wandb.log({"test_loss_epoch": total_loss / count}, step=step)
 
-            if step % 40 == 0:
+            if step % 40 == 0 or True:
                 # Pick 3 random images from the test set and log the input and output.
                 x = torch.stack([
-                    self.test_loader.dataset.get_random_image()
+                    Trainer._get_random_video_from_dataloader(self.test_loader)
                     for _ in range(3)
                 ]).to(self.args.device)
                 y = self.model(x)
@@ -121,10 +130,9 @@ class Trainer:
                 torch.save(self.model.state_dict(), str(checkpoint_dir / f"checkpoint_at_step_{step}.pth"))
 
     def _calc_loss(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        assert target.shape[1:] == (3, 8, 64, 64), f"Expected (B, 3, 8, 64, 64) but got {output.shape}"
         frame_losses = sum([
             self._calc_frame_loss(output[:, :, i], target[:, :, i])
-            for i in range(8)
+            for i in range(target.shape[1])
         ])
         transition_losses = sum([
             self._calc_transition_loss(
@@ -146,8 +154,36 @@ class Trainer:
 
     @staticmethod
     def _prep_vid_for_wandb(vid: torch.Tensor) -> torch.Tensor:
-        assert vid.shape == (3, 8, 64, 64), f"Expected (8, 3, 64, 64) but got {vid.shape}"
         vid = rearrange(vid, "c t h w -> t c h w")
         vid = (vid * 255).to(torch.uint8)
         return vid
 
+    @staticmethod
+    def _remove_random_frame(vid: torch.Tensor) -> torch.Tensor:
+        # t is second dimension.
+        t = vid.shape[1]
+        frame_idx = random.randint(0, t - 1)
+        # copy vid and set frame to zeros.
+        vid = vid.clone()
+        vid[:, frame_idx] = 0
+        return vid
+
+    @staticmethod
+    def _get_random_video_from_dataloader(dataloader: torch.utils.data.DataLoader) -> torch.Tensor:
+        dataset = dataloader.dataset
+        size = len(dataset)
+        idx = random.randint(0, size - 1)
+        return dataset[idx]
+
+    def _log_sample_data(self) -> None:
+        # Pick 3 random images from the test set and log the input and output.
+        x = torch.stack([
+            Trainer._get_random_video_from_dataloader(self.train_loader)
+            for _ in range(2)
+        ])
+
+        wandb.log({
+            "data_check": [wandb.Video(self._prep_vid_for_wandb(img)) for img in x.cpu()],
+        }, step=0)
+
+        print("Logged data sample.")
