@@ -1,4 +1,5 @@
 import random
+from typing import Optional
 
 import numpy as np
 import torch
@@ -18,10 +19,12 @@ class TinyDiffuser(torch.nn.Module):
 
     @staticmethod
     def cosine_decay(t, total_timesteps):
-        return 0.1 * (np.cos(np.pi * t / total_timesteps) + 1) / 2
+        max_value = 0.5
+        return max_value * (np.cos(np.pi * t / total_timesteps) + 1) / 2
 
-    def create_noise(self, x: torch.Tensor) -> torch.Tensor:
-        t = random.randint(0, self.total_timesteps - 1)
+    def create_noise(self, x: torch.Tensor, t: Optional[int] = None) -> torch.Tensor:
+        if t is None:
+            t = random.randint(0, self.total_timesteps - 1)
         noise_std = self.noise_schedule[t]
         noise = torch.randn_like(x) * noise_std
         return noise.to(x.device)

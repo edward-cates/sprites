@@ -31,6 +31,7 @@ class Trainer:
             self._train(step)
             self._test(step)
             self._sample(step)
+            self._generate(step)
             print()
             step += 1
 
@@ -38,7 +39,7 @@ class Trainer:
         self.diffuser.train()
         total_loss = 0.0
         count = 0
-        for x in tqdm(self.train_dataloader):
+        for x in tqdm(self.train_dataloader, desc=f"({wandb.run.name}) Train ({step})"):
             loss = self._train_inner(
                 x.to(self.device),
             )
@@ -51,12 +52,12 @@ class Trainer:
             self.optimizer.step()
 
         wandb.log({"train_loss": total_loss / count}, step=step)
-    
+
     def _test(self, step: int):
         self.diffuser.eval()
         total_loss = 0.0
         count = 0
-        for x in tqdm(self.test_dataloader):
+        for x in tqdm(self.test_dataloader, desc=f"({wandb.run.name}) Test ({step})"):
             loss = self._train_inner(
                 x.to(self.device),
             )
@@ -74,23 +75,38 @@ class Trainer:
         num_test_samples = len(self.test_dataset)
         random_test_sample_idx = random.randint(0, num_test_samples - 1)
         x = self.test_dataset[random_test_sample_idx].to(self.device)
-        noise = self.diffuser.create_noise(x)
-        x_noisy = x + noise
-        p_noise = self.diffuser(x_noisy)
-        x_p = x_noisy - p_noise
+        with torch.no_grad():
+            noise = self.diffuser.create_noise(x, t=self.diffuser.total_timesteps * 2 // 3)
+            x_noisy = x + noise
+            p_noise = self.diffuser(x_noisy)
+            x_p = x_noisy - p_noise
         wandb.log({
             "original": self._prep_vid_for_wandb(x),
             "noisy": self._prep_vid_for_wandb(x_noisy),
             "predicted_noise": self._prep_vid_for_wandb(p_noise),
             "reconstructed": self._prep_vid_for_wandb(x_p),
         })
+        print("Samples logged.")
+
+    def _generate(self, step: int):
+        with torch.no_grad():
+            x = torch.randn(1, 3, 16, 128, 128).to(self.device)
+            for _ in tqdm(range(100), desc="Generating"):
+                noise_p = self.diffuser(x)
+                x = x - noise_p
+        wandb.log({
+            "generated": self._prep_vid_for_wandb(x),
+        })
+        print("Generation logged.")
 
     @staticmethod
     def _prep_vid_for_wandb(vid: torch.Tensor) -> torch.Tensor:
-        vid = torch.nn.Sigmoid()(vid)
+        vid = vid.detach().cpu()
+        # clamp vid to [0, 1]
+        vid = torch.clamp(vid, 0, 1)
         vid = rearrange(vid, "c t h w -> t c h w")
         vid = (vid * 255).to(torch.uint8)
-        return vid
+        return wandb.Video(vid)
 
 
 if __name__ == "__main__":
