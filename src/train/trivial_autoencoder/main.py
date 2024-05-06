@@ -13,11 +13,12 @@ from src.train.trivial_autoencoder.trainer import Trainer
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--batch_size", "-b", type=int, default=2)
-    parser.add_argument("--learning_rate", "-r", type=float, default=1e-4)
+    parser.add_argument("--batch_size", "-b", type=int, default=32)
+    parser.add_argument("--gradient_accumulation", "-a", type=int, default=1)
+    parser.add_argument("--learning_rate", "-r", type=float, default=1e-3)
     parser.add_argument("--gradient_clip", "-c", type=float, default=1.0)
     parser.add_argument("--checkpoint", "-m", type=str, default=None)
-    parser.add_argument("--loss_type", "-l", type=str, default="mse") # Can pass comma-separated to combine.
+    parser.add_argument("--loss_type", "-l", type=str, default="mse,bce") # Can pass comma-separated to combine.
     args = parser.parse_args()
 
     assert all([
@@ -39,7 +40,7 @@ if __name__ == '__main__':
     train_dataset = FlyingMnistDataset("train")
     test_dataset = FlyingMnistDataset("val")
 
-    wandb.init(project="flying-mnist_tiny-autoencoder_video")
+    wandb.init(project="flying-mnist_tiny-autoencoder_video_2")
     wandb.config.update(args)
     print(f"This run is named {wandb.run.name}.")
 

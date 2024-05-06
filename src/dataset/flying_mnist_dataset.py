@@ -13,7 +13,7 @@ class FlyingMnistDataset:
         self.num_samples = len(list(self.dir.glob("*.mp4")))
 
     def __len__(self):
-        return self.num_samples
+        return min(1000, self.num_samples)
 
     def __getitem__(self, idx) -> torch.Tensor:
         return self._preprocess_video(
@@ -44,12 +44,13 @@ class FlyingMnistDataset:
 
     @staticmethod
     def _keep_first_second(video_data: torch.Tensor) -> torch.Tensor:
-        return video_data[:16]
+        return video_data[:8]
 
     @staticmethod
     def _resize_video(video_data: torch.Tensor) -> torch.Tensor:
+        img_size = 64
         transforms = torchvision.transforms.Compose([
-            torchvision.transforms.Resize((256, 256)),
+            torchvision.transforms.Resize((img_size, img_size)),
         ])
         return transforms(video_data)
 

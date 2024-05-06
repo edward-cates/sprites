@@ -20,6 +20,7 @@ class Trainer:
             test_dataset: Iterable,
             args: Namespace,
     ):
+        # model = torch.nn.DataParallel(model)
         self.model = model.to(args.device)
         self.args = args
 
@@ -68,27 +69,37 @@ class Trainer:
         total_loss = 0.0
         count = 0
 
-        pbar = tqdm(self.train_loader, desc="Training")
-        for batch in pbar:
-            self.optimizer.zero_grad()
-
-            batch = torch.stack([
-                self._remove_random_frame(vid)
-                for vid in batch
-            ])
-
+        pbar = tqdm(
+            enumerate(self.train_loader),
+            total=len(self.train_loader),
+            desc="Training",
+        )
+        for batch_idx, batch in pbar:
             x = batch.to(self.args.device)
-            y = self.model(x)
-            loss = self._calc_loss(output=y, target=x)
+
+            y, mu, logvar = self.model(
+                # Random erasing.
+                torch.stack([
+                    self._remove_random_frame(vid)
+                    for vid in x
+                ])
+            )
+
+            loss = self._calc_loss(batch_idx=batch_idx, output=y, mu=mu, logvar=logvar, target=x)
+            loss = loss / self.args.gradient_accumulation
             loss.backward()
-            # clip gradients
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.gradient_clip)
-            self.optimizer.step()
+
+            if (((batch_idx + 1) % self.args.gradient_accumulation) == 0) \
+                    or (batch_idx == (len(self.train_loader) - 1)):
+                # clip gradients
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.gradient_clip)
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
             pbar.set_postfix({"Loss": loss.item(), f"({wandb.run.name}) Train Step": step})
             total_loss += loss.item()
             count += 1
-        
+
         print(f"Train loss epoch: {total_loss / count}")
         wandb.log({"train_loss_epoch": total_loss / count}, step=step)
 
@@ -97,12 +108,13 @@ class Trainer:
         total_loss = 0.0
         count = 0
 
-        pbar = tqdm(self.test_loader, desc="Testing")
+        pbar = tqdm(enumerate(self.test_loader), total=len(self.test_loader), desc="Testing")
         with torch.no_grad():
-            for batch in pbar:
+            for batch_idx, batch in pbar:
                 x = batch.to(self.args.device)
-                y = self.model(x)
-                loss = self._calc_loss(output=y, target=x)
+                y, mu, logvar = self.model(x)
+                loss = self._calc_loss(batch_idx=batch_idx, output=y, mu=mu, logvar=logvar, target=x)
+                loss = loss / self.args.gradient_accumulation
 
                 pbar.set_postfix({"Loss": loss.item(), f"({wandb.run.name}) Test Step": step})
                 total_loss += loss.item()
@@ -111,16 +123,18 @@ class Trainer:
             print(f"Test loss epoch: {total_loss / count}")
             wandb.log({"test_loss_epoch": total_loss / count}, step=step)
 
-            if step % 40 == 0 or True:
+            if step % 30 == 0 or True:
                 # Pick 3 random images from the test set and log the input and output.
                 x = torch.stack([
                     Trainer._get_random_video_from_dataloader(self.test_loader)
-                    for _ in range(3)
+                    for _ in range(2)
                 ]).to(self.args.device)
-                y = self.model(x)
+                y, _, _ = self.model(x)
+
+                assert x.shape == y.shape, f"x shape ({x.shape}) != y shape ({y.shape})"
 
                 wandb.log({
-                    "input_images": [wandb.Video(self._prep_vid_for_wandb(img)) for img in x.cpu()],
+                    "input_images_2": [wandb.Video(self._prep_vid_for_wandb(img)) for img in x.cpu()],
                     "output_images": [wandb.Video(self._prep_vid_for_wandb(img)) for img in y.cpu()],
                 }, step=step)
 
@@ -129,7 +143,7 @@ class Trainer:
                 checkpoint_dir.mkdir(exist_ok=True, parents=True)
                 torch.save(self.model.state_dict(), str(checkpoint_dir / f"checkpoint_at_step_{step}.pth"))
 
-    def _calc_loss(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def _calc_loss(self, batch_idx: int, output: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         frame_losses = sum([
             self._calc_frame_loss(output[:, :, i], target[:, :, i])
             for i in range(target.shape[1])
@@ -141,7 +155,15 @@ class Trainer:
             )
             for i in range(7)
         ])
-        return frame_losses + transition_losses
+        # kl_divergence = torch.sqrt(self._calc_kl_divergence(mu, logvar))
+
+        if batch_idx == 0:
+            print(f"Frame loss: {frame_losses}, Transition loss: {transition_losses}")#, KL Divergence: {kl_divergence}")
+
+        return frame_losses + transition_losses# + kl_divergence
+
+    def _calc_kl_divergence(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
     def _calc_frame_loss(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         return sum([
@@ -187,3 +209,4 @@ class Trainer:
         }, step=0)
 
         print("Logged data sample.")
+
