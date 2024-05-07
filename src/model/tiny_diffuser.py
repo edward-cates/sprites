@@ -5,16 +5,16 @@ import numpy as np
 import torch
 
 class TinyDiffuser(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, in_channels: int = 3):
         super().__init__()
         self.total_timesteps = 1000
         self.noise_schedule = [self.cosine_decay(t, self.total_timesteps) for t in range(self.total_timesteps)]
         self.layers = torch.nn.Sequential(
-            torch.nn.Conv3d(3, 64, kernel_size=5, stride=1, padding=2, bias=False),
+            torch.nn.Conv3d(in_channels, 64, kernel_size=5, stride=1, padding=2, bias=False),
             torch.nn.ReLU(),
             torch.nn.Conv3d(64, 64, kernel_size=3, stride=1, padding=1, bias=False),
             torch.nn.ReLU(),
-            torch.nn.Conv3d(64, 3, kernel_size=3, stride=1, padding=1, bias=False),
+            torch.nn.Conv3d(64, in_channels, kernel_size=3, stride=1, padding=1, bias=False),
         )
 
     @staticmethod
@@ -32,7 +32,9 @@ class TinyDiffuser(torch.nn.Module):
     def forward(self, x):
         # input: signal,
         # output: predicted noise.
-        return self.layers(x)
+        y = self.layers(x)
+        assert x.shape == y.shape, f"Expected {x.shape} and {y.shape} to match."
+        return y
 
 
 if __name__ == "__main__":

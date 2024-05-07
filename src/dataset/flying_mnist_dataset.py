@@ -5,17 +5,18 @@ import torchvision
 from einops import rearrange
 
 class FlyingMnistDataset:
-    def __init__(self, train_or_val: str):
+    def __init__(self, train_or_val: str, max_samples: int = -1):
         assert train_or_val in ["train", "val"], \
             f"train_or_val must be 'train' or 'val', not {train_or_val}."
         self.is_val = train_or_val == "val"
         self.dir = Path(f"data/flying-mnist/flying_mnist_11k/{train_or_val}")
         assert self.dir.exists(), f"Directory {self.dir} does not exist."
         self.num_samples = len(list(self.dir.glob("*.mp4")))
+        if max_samples > 0:
+            self.num_samples = min(max_samples, self.num_samples)
 
     def __len__(self):
-        min_ = 100 if self.is_val else 1000
-        return min(min_, self.num_samples)
+        return self.num_samples
 
     def __getitem__(self, idx) -> torch.Tensor:
         return self._preprocess_video(

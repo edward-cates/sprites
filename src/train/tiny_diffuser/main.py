@@ -22,8 +22,8 @@ class Trainer:
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
         self.test_dataloader = torch.utils.data.DataLoader(self.test_dataset, batch_size=kwargs.get("batch_size"), shuffle=False)
 
-        self.optimizer = torch.optim.Adam(self.diffuser.parameters(), lr=1e-3)
-        self.loss_fxn = torch.nn.functional.mse_loss
+        self.optimizer = torch.optim.Adam(self.diffuser.parameters(), lr=1e-4)
+        self.loss_fxn = lambda outputs, targets: torch.nn.functional.mse_loss(outputs, targets)
 
     def train(self):
         step = 0
@@ -32,8 +32,11 @@ class Trainer:
             self._test(step)
             self._sample(step)
             self._generate(step)
+            wandb.run.save()
             print()
             step += 1
+            # save checkpoint
+            torch.save(self.diffuser.state_dict(), f"checkpoints/diffusion/tiny_diffuser_{step}.pt")
 
     def _train(self, step: int):
         self.diffuser.train()
@@ -74,29 +77,36 @@ class Trainer:
     def _sample(self, step: int):
         num_test_samples = len(self.test_dataset)
         random_test_sample_idx = random.randint(0, num_test_samples - 1)
-        x = self.test_dataset[random_test_sample_idx].to(self.device)
+        x = self.test_dataset[random_test_sample_idx].unsqueeze(0).to(self.device)
         with torch.no_grad():
             noise = self.diffuser.create_noise(x, t=self.diffuser.total_timesteps * 2 // 3)
             x_noisy = x + noise
             p_noise = self.diffuser(x_noisy)
             x_p = x_noisy - p_noise
         wandb.log({
-            "original": self._prep_vid_for_wandb(x),
-            "noisy": self._prep_vid_for_wandb(x_noisy),
-            "predicted_noise": self._prep_vid_for_wandb(p_noise),
-            "reconstructed": self._prep_vid_for_wandb(x_p),
-        })
+            "original": self._prep_vid_for_wandb(x[0]),
+            "noisy": self._prep_vid_for_wandb(x_noisy[0]),
+            "predicted_noise": self._prep_vid_for_wandb(p_noise[0]),
+            "reconstructed": self._prep_vid_for_wandb(x_p[0]),
+        }, step=step)
         print("Samples logged.")
 
     def _generate(self, step: int):
         with torch.no_grad():
-            x = torch.randn(1, 3, 16, 128, 128).to(self.device)
-            for _ in tqdm(range(100), desc="Generating"):
+            x = torch.randn(1, 3, 8, 64, 64).to(self.device)
+            intermediates = [x[0].clone()]
+            for ix in tqdm(range(100), desc="Generating"):
                 noise_p = self.diffuser(x)
-                x = x - noise_p
+                x_t = x - noise_p
+                x = 0.9 * x + 0.1 * x_t
+                if (ix + 1) % 25 == 0:
+                    intermediates.append(x[0].clone())
         wandb.log({
-            "generated": self._prep_vid_for_wandb(x),
-        })
+            "generated": [
+                self._prep_vid_for_wandb(intermediate)
+                for intermediate in intermediates
+            ],
+        }, step=step)
         print("Generation logged.")
 
     @staticmethod
