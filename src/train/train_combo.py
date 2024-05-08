@@ -26,8 +26,10 @@ class Trainer:
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
         self.test_dataloader = torch.utils.data.DataLoader(self.test_dataset, batch_size=kwargs.get("batch_size"), shuffle=False)
 
-        self.optimizer = torch.optim.Adam(self.diffuser.parameters(), lr=3e-5)
-        self.loss_fxn = torch.nn.functional.mse_loss
+        self.optimizer = torch.optim.AdamW(
+            list(self.vae.parameters()) + list(self.diffuser.parameters()),
+            lr=1e-4,
+        )
 
     def train(self):
         step = 0
@@ -114,8 +116,8 @@ class Trainer:
         latent_noise_p = self.diffuser(latent + latent_noise)
         denoised_latent = noisy_latent - latent_noise_p
         x_p = self.vae.decode(denoised_latent)
-        img_loss = self.loss_fxn(x_p, x)
-        noise_loss = self.loss_fxn(latent_noise, latent_noise_p)
+        img_loss = torch.nn.functional.mse_loss(x_p, x)
+        noise_loss = torch.nn.functional.mse_loss(latent_noise, latent_noise_p)
         pbar.set_postfix({"Image Loss": img_loss.item(), "Noise Loss": noise_loss.item()})
         return img_loss, noise_loss
 
@@ -128,7 +130,7 @@ class Trainer:
             print("latent shape:", latent.shape)
             latent_noise = self.diffuser.create_noise(latent, t=self.diffuser.total_timesteps * 2 // 3)
             noisy_latent = latent + latent_noise
-            latent_noise_p = self.diffuser(latent + latent_noise)
+            latent_noise_p = self.diffuser(noisy_latent)
             denoised_latent = noisy_latent - latent_noise_p
             x_p = self.vae.decode(denoised_latent)
         wandb.log({
@@ -145,11 +147,12 @@ class Trainer:
             intermediates = [
                 self.vae.decode(latent)[0].clone()
             ]
-            for ix in tqdm(range(100), desc="Generating"):
+            for t in tqdm(range(self.diffuser.total_timesteps), desc="Generating"):
                 noise_p = self.diffuser(latent)
-                latent_t = latent - noise_p
-                latent = 0.9 * latent + 0.1 * latent_t
-                if (ix + 1) % 25 == 0:
+                latent_t_0 = latent - noise_p
+                noise_tm1 = self.diffuser.create_noise(latent, t=t)
+                latent = latent_t_0 + noise_tm1
+                if (t + 1) % 250 == 0:
                     intermediates.append(
                         self.vae.decode(latent)[0].clone(),
                     )
