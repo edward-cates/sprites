@@ -51,7 +51,7 @@ class FlyingMnistDataset:
 
     @staticmethod
     def _resize_video(video_data: torch.Tensor) -> torch.Tensor:
-        img_size = 64
+        img_size = 128
         transforms = torchvision.transforms.Compose([
             torchvision.transforms.Resize((img_size, img_size)),
         ])
