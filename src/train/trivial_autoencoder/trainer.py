@@ -41,6 +41,7 @@ class Trainer:
         while True:
             self._train(step=step)
             self._test(step=step)
+            wandb.run.save()
             print()
             step += 1
 
@@ -125,10 +126,11 @@ class Trainer:
 
             if step % 30 == 0 or True:
                 # Pick 3 random images from the test set and log the input and output.
+                x = Trainer._get_random_video_from_dataloader(self.test_loader).unsqueeze(0).to(self.args.device)
                 x = torch.stack([
-                    Trainer._get_random_video_from_dataloader(self.test_loader)
-                    for _ in range(2)
-                ]).to(self.args.device)
+                    self._remove_random_frame(vid)
+                    for vid in x
+                ])
                 y, _, _ = self.model(x)
 
                 assert x.shape == y.shape, f"x shape ({x.shape}) != y shape ({y.shape})"
@@ -185,9 +187,9 @@ class Trainer:
         # t is second dimension.
         t = vid.shape[1]
         frame_idx = random.randint(0, t - 1)
-        # copy vid and set frame to zeros.
+        # copy vid and set frame to random noise.
         vid = vid.clone()
-        vid[:, frame_idx] = 0
+        vid[:, frame_idx] = torch.randn_like(vid[:, frame_idx])
         return vid
 
     @staticmethod

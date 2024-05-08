@@ -37,8 +37,8 @@ if __name__ == '__main__':
     # dataset = SpritesDataset()
     # train_dataset, test_dataset = dataset.randomly_split(0.9)
 
-    train_dataset = FlyingMnistDataset("train")
-    test_dataset = FlyingMnistDataset("val")
+    train_dataset = FlyingMnistDataset("train", max_samples=1000)
+    test_dataset = FlyingMnistDataset("val", max_samples=100)
 
     wandb.init(project="flying-mnist_tiny-autoencoder_video_2")
     wandb.config.update(args)
