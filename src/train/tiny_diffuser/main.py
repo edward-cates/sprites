@@ -14,15 +14,15 @@ class Trainer:
         self.device = kwargs.get("device")
 
         self.diffuser = TinyDiffuser()
-        self.diffuser.to(device)
+        self.diffuser.to(self.device)
 
-        self.train_dataset = FlyingMnistDataset("train")
-        self.test_dataset = FlyingMnistDataset("val")
+        self.train_dataset = FlyingMnistDataset("train", max_samples=1000)
+        self.test_dataset = FlyingMnistDataset("val", max_samples=100)
 
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
         self.test_dataloader = torch.utils.data.DataLoader(self.test_dataset, batch_size=kwargs.get("batch_size"), shuffle=False)
 
-        self.optimizer = torch.optim.Adam(self.diffuser.parameters(), lr=1e-4)
+        self.optimizer = torch.optim.AdamW(self.diffuser.parameters(), lr=1e-4)
         self.loss_fxn = lambda outputs, targets: torch.nn.functional.mse_loss(outputs, targets)
 
     def train(self):
@@ -92,14 +92,22 @@ class Trainer:
         print("Samples logged.")
 
     def _generate(self, step: int):
+        """
+        create a random tensor x.
+        for each timestep:
+          langevein diffusion step.
+          -> add a random perturbation (according to the noise schedule?)
+        """
+        # https://www.assemblyai.com/blog/minimagen-build-your-own-imagen-text-to-image-model/
         with torch.no_grad():
             x = torch.randn(1, 3, 8, 64, 64).to(self.device)
             intermediates = [x[0].clone()]
-            for ix in tqdm(range(100), desc="Generating"):
-                noise_p = self.diffuser(x)
-                x_t = x - noise_p
-                x = 0.9 * x + 0.1 * x_t
-                if (ix + 1) % 25 == 0:
+            for t in tqdm(range(self.diffuser.total_timesteps), desc="Generating"):
+                noise_t = self.diffuser(x)
+                x_0 = x - noise_t
+                noise_tm1 = self.diffuser.create_noise(x, t=t)
+                x = x_0 + noise_tm1
+                if (t + 1) % 250 == 0:
                     intermediates.append(x[0].clone())
         wandb.log({
             "generated": [
@@ -120,12 +128,10 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    device = "cuda:0"
-
-    wandb.init(project="flying-mnist_tiny-diffuser")
+    wandb.init(project="flying-mnist_tiny-diffuser-2")
 
     kwargs = {
-        "device": "cuda:0",
+        "device": "cuda:1",
         "batch_size": 32,
     }
 
