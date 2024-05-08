@@ -2,23 +2,54 @@
 
 import torch
 
+class EncoderBlock(torch.nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.layers = torch.nn.Sequential(
+            torch.nn.Conv3d(in_channels, out_channels, kernel_size=5, stride=2, padding=2, bias=False),
+            torch.nn.ReLU(),
+        )
+    def forward(self, x):
+        return self.layers(x)
+
+# [b, 3, 8, 128, 128].
+# [b, 16, 4, 64, 64].
+
+class DecoderBlock(torch.nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.layers = torch.nn.Sequential(
+            torch.nn.ConvTranspose3d(in_channels, out_channels, kernel_size=6, stride=2, padding=2, bias=False),
+        )
+    def forward(self, x):
+        return self.layers(x)
+
+class Encoder(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = EncoderBlock(in_channels=3, out_channels=16)
+    def forward(self, x):
+        x = self.conv1(x)
+        return x
+
+class Decoder(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = DecoderBlock(in_channels=16, out_channels=3)
+    def forward(self, x):
+        x = self.conv1(x)
+        # clamp to 0-1.
+        x = torch.clamp(x, 0, 1)
+        return x
+
 class TinyAutoencoder(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.encoder = torch.nn.Sequential(
-            torch.nn.Conv3d(3, 64, kernel_size=5, stride=2, padding=2, bias=False),
-            torch.nn.BatchNorm3d(64),
-            torch.nn.ReLU(),
-        )
+        self.encoder = Encoder()
+        self.decoder = Decoder()
 
         # self.mu_layer = IdentityConv()
         # self.logvar_layer = IdentityConv()
-
-        self.decoder = torch.nn.Sequential(
-            torch.nn.ConvTranspose3d(64, 3, kernel_size=6, stride=2, padding=2, bias=False),
-            torch.nn.BatchNorm3d(3),
-            torch.nn.ReLU(),
-        )
 
     """
     Notes:
@@ -44,15 +75,14 @@ class TinyAutoencoder(torch.nn.Module):
     def decode(self, x):
         # Take latent and return the reconstructed x.
         x = self.decoder(x)
-        # clamp to 0-1.
-        x = torch.clamp(x, 0, 1)
         return x
 
     def forward(self, x):
         # latent, mu, logvar = self.encode(x)
         latent = self.encode(x)
-        x = self.decode(latent)
-        return x, 0, 0
+        y = self.decode(latent)
+        assert x.shape == y.shape, f"{x.shape} != {y.shape}"
+        return y, 0, 0
 
     # Private.
 
