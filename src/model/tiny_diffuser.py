@@ -9,13 +9,11 @@ class TinyDiffuser(torch.nn.Module):
         super().__init__()
         self.total_timesteps = 1000
         self.noise_schedule = [self.cosine_decay(t, self.total_timesteps) for t in range(self.total_timesteps)]
-        self.layers = torch.nn.Sequential(
-            torch.nn.Conv3d(in_channels, 64, kernel_size=5, stride=1, padding=2, bias=False),
-            torch.nn.ReLU(),
-            torch.nn.Conv3d(64, 64, kernel_size=3, stride=1, padding=1, bias=False),
-            torch.nn.ReLU(),
-            torch.nn.Conv3d(64, in_channels, kernel_size=3, stride=1, padding=1, bias=False),
-        )
+        self.conv_in = torch.nn.Conv3d(in_channels, 64, kernel_size=5, stride=1, padding=2, bias=False)
+        self.relu_in = torch.nn.ReLU()
+        self.conv_mid = torch.nn.Conv3d(64, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.relu_mid = torch.nn.ReLU()
+        self.conv_out = torch.nn.Conv3d(64, in_channels, kernel_size=3, stride=1, padding=1, bias=False)
 
     @staticmethod
     def cosine_decay(t, total_timesteps):
@@ -32,7 +30,11 @@ class TinyDiffuser(torch.nn.Module):
     def forward(self, x):
         # input: signal,
         # output: predicted noise.
-        y = self.layers(x)
+        y = self.conv_in(x)
+        y = self.relu_in(y)
+        y = y + self.conv_mid(y)
+        y = self.relu_mid(y)
+        y = self.conv_out(y)
         assert x.shape == y.shape, f"Expected {x.shape} and {y.shape} to match."
         return y
 
