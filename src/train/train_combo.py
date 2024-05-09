@@ -17,7 +17,7 @@ class Trainer:
         self.vae = TinyAutoencoder()
         self.vae.to(self.device)
 
-        self.diffuser = TinyDiffuser(in_channels=64)
+        self.diffuser = TinyDiffuser(in_channels=16)
         self.diffuser.to(self.device)
 
         self.train_dataset = FlyingMnistDataset("train", max_samples=1000)
@@ -143,7 +143,7 @@ class Trainer:
 
     def _generate(self, step: int):
         with torch.no_grad():
-            latent = torch.randn(1, 64, 4, 32, 32).to(self.device)
+            latent = torch.randn(1, 16, 4, 64, 64).to(self.device)
             intermediates = [
                 self.vae.decode(latent)[0].clone()
             ]
@@ -171,7 +171,8 @@ class Trainer:
         frame_idx = random.randint(0, t - 1)
         # copy vid and set frame to zeros.
         vid = vid.clone()
-        vid[:, frame_idx] = 0
+        # random
+        vid[:, frame_idx] = torch.randn_like(vid[:, frame_idx])
         return vid
 
     @staticmethod
