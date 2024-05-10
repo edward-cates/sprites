@@ -6,37 +6,48 @@ class EncoderBlock(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
         self.layers = torch.nn.Sequential(
-            torch.nn.Conv3d(in_channels, out_channels, kernel_size=5, stride=2, padding=2, bias=False),
+            torch.nn.Conv3d(in_channels, out_channels, kernel_size=5, stride=(1, 2, 2), padding=2, bias=False),
             torch.nn.ReLU(),
         )
     def forward(self, x):
         return self.layers(x)
 
 # [b, 3, 8, 128, 128].
-# [b, 16, 4, 64, 64].
+# [b, 32, 8, 32, 32].
 
 class DecoderBlock(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
+    def __init__(self, in_channels: int, out_channels: int, include_relu: bool):
         super().__init__()
-        self.layers = torch.nn.Sequential(
-            torch.nn.ConvTranspose3d(in_channels, out_channels, kernel_size=6, stride=2, padding=2, bias=False),
-        )
+        layers = [
+            torch.nn.ConvTranspose3d(in_channels, out_channels, kernel_size=(5, 6, 6), stride=(1, 2, 2), padding=2, bias=False),
+        ]
+        if include_relu:
+            layers.append(torch.nn.ReLU())
+        self.layers = torch.nn.Sequential(*layers)
     def forward(self, x):
         return self.layers(x)
 
 class Encoder(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = EncoderBlock(in_channels=3, out_channels=16)
+        self.conv1 = EncoderBlock(in_channels=3, out_channels=32)
+        self.conv2 = EncoderBlock(in_channels=32, out_channels=32)
+        self.conv3 = EncoderBlock(in_channels=32, out_channels=64)
+        self.conv4 = EncoderBlock(in_channels=64, out_channels=64)
     def forward(self, x):
         x = self.conv1(x)
+        x = self.conv2(x)
         return x
 
 class Decoder(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = DecoderBlock(in_channels=16, out_channels=3)
+        self.conv4 = DecoderBlock(in_channels=64, out_channels=64, include_relu=True)
+        self.conv3 = DecoderBlock(in_channels=64, out_channels=32, include_relu=True)
+        self.conv2 = DecoderBlock(in_channels=32, out_channels=32, include_relu=True)
+        self.conv1 = DecoderBlock(in_channels=32, out_channels=3, include_relu=False)
     def forward(self, x):
+        x = self.conv2(x)
         x = self.conv1(x)
         # clamp to 0-1.
         x = torch.clamp(x, 0, 1)
@@ -99,8 +110,7 @@ if __name__ == "__main__":
     device = "cuda:1"
     model.to(device)
 
-    # x = torch.randn(1, 3, 8, 64, 64)
-    x = torch.randn(1, 3, 16, 128, 128)
+    x = torch.randn(1, 3, 8, 128, 128)
     y, _, _ = model(x.to(device))
     assert x.shape == y.shape, f"{x.shape} != {y.shape}"
     print("Success!")

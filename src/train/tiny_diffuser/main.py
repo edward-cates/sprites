@@ -1,4 +1,6 @@
+import argparse
 import random
+from pathlib import Path
 
 from tqdm import tqdm
 import wandb
@@ -8,35 +10,43 @@ from einops import rearrange
 from src.model.tiny_diffuser import TinyDiffuser
 
 from src.dataset.flying_mnist_dataset import FlyingMnistDataset
+from src.dataset.sprites_dataset import SpritesDataset
 
 class Trainer:
     def __init__(self, **kwargs):
         self.device = kwargs.get("device")
+        self.kwargs = kwargs
 
         self.diffuser = TinyDiffuser()
+        if kwargs.get("checkpoint") is not None:
+            self.diffuser.load_state_dict(torch.load(kwargs["checkpoint"]))
         self.diffuser.to(self.device)
 
-        self.train_dataset = FlyingMnistDataset("train", max_samples=1000)
-        self.test_dataset = FlyingMnistDataset("val", max_samples=100)
+        if kwargs.get("use_sprites") is not True:
+            self.train_dataset = FlyingMnistDataset("train", max_samples=4000)
+            self.test_dataset = FlyingMnistDataset("val", max_samples=400)
+        else:
+            sprites_dataset = SpritesDataset()
+            self.train_dataset, self.test_dataset = sprites_dataset.randomly_split(0.85)
 
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
         self.test_dataloader = torch.utils.data.DataLoader(self.test_dataset, batch_size=kwargs.get("batch_size"), shuffle=False)
 
-        self.optimizer = torch.optim.AdamW(self.diffuser.parameters(), lr=1e-4)
-        self.loss_fxn = lambda outputs, targets: torch.nn.functional.mse_loss(outputs, targets)
+        self.optimizer = torch.optim.AdamW(self.diffuser.parameters(), lr=3e-5)
 
     def train(self):
         step = 0
         while True:
             self._train(step)
             self._test(step)
-            self._sample(step)
-            self._generate(step)
+            if (self.kwargs.get("use_sprites") is not True) or (step % 20 == 0):
+                self._sample(step)
+                self._generate(step)
+                self._save_checkpoint(step)
             wandb.run.save()
             print()
             step += 1
             # save checkpoint
-            torch.save(self.diffuser.state_dict(), f"checkpoints/diffusion/tiny_diffuser_{step}.pt")
 
     def _train(self, step: int):
         self.diffuser.train()
@@ -56,6 +66,11 @@ class Trainer:
 
         wandb.log({"train_loss": total_loss / count}, step=step)
 
+    def _save_checkpoint(self, step: int):
+        checkpoint_dir = Path("checkpoints") / wandb.run.project / wandb.run.name
+        checkpoint_dir.mkdir(exist_ok=True, parents=True)
+        torch.save(self.diffuser.state_dict(), str(checkpoint_dir / f"checkpoint_at_step_{step}.pth"))
+
     def _test(self, step: int):
         self.diffuser.eval()
         total_loss = 0.0
@@ -70,24 +85,30 @@ class Trainer:
         wandb.log({"test_loss": total_loss / count}, step=step)
 
     def _train_inner(self, x: torch.Tensor):
-        noise = self.diffuser.create_noise(x)
-        p_noise = self.diffuser(x + noise)
-        return self.loss_fxn(p_noise, noise)
+        x_noisy, t, noise = self.diffuser.create_noised_image(x)
+        predicted_noise = self.diffuser(x_noisy)
+        return torch.nn.functional.mse_loss(predicted_noise, noise)
 
     def _sample(self, step: int):
         num_test_samples = len(self.test_dataset)
         random_test_sample_idx = random.randint(0, num_test_samples - 1)
         x = self.test_dataset[random_test_sample_idx].unsqueeze(0).to(self.device)
         with torch.no_grad():
-            noise = self.diffuser.create_noise(x, t=self.diffuser.total_timesteps * 2 // 3)
-            x_noisy = x + noise
-            p_noise = self.diffuser(x_noisy)
-            x_p = x_noisy - p_noise
+            t = self.diffuser.total_timesteps // 5
+            x_noisy, t_b, noise = self.diffuser.create_noised_image(x, t=t)
+            predicted_noise = self.diffuser(x_noisy)
+            # predicted_x_0 = x_noisy - predicted_noise
+            predicted_x_0 = self.diffuser.noise_scheduler.predict_start_from_noise(
+                x_t=x_noisy,
+                t=t_b,
+                noise=predicted_noise,
+            )
+
         wandb.log({
             "original": self._prep_vid_for_wandb(x[0]),
             "noisy": self._prep_vid_for_wandb(x_noisy[0]),
-            "predicted_noise": self._prep_vid_for_wandb(p_noise[0]),
-            "reconstructed": self._prep_vid_for_wandb(x_p[0]),
+            "predicted_noise": self._prep_vid_for_wandb(predicted_noise[0]),
+            "reconstructed": self._prep_vid_for_wandb(predicted_x_0[0]),
         }, step=step)
         print("Samples logged.")
 
@@ -99,20 +120,11 @@ class Trainer:
           -> add a random perturbation (according to the noise schedule?)
         """
         # https://www.assemblyai.com/blog/minimagen-build-your-own-imagen-text-to-image-model/
-        with torch.no_grad():
-            x = torch.randn(1, 3, 8, 64, 64).to(self.device)
-            intermediates = [x[0].clone()]
-            for t in tqdm(range(self.diffuser.total_timesteps), desc="Generating"):
-                noise_t = self.diffuser(x)
-                x_0 = x - noise_t
-                noise_tm1 = self.diffuser.create_noise(x, t=t)
-                x = x_0 + noise_tm1
-                if (t + 1) % 250 == 0:
-                    intermediates.append(x[0].clone())
+        example_x = self.test_dataset[0].unsqueeze(0).to(self.device)
+        x = self.diffuser.generate(example_x)
         wandb.log({
             "generated": [
-                self._prep_vid_for_wandb(intermediate)
-                for intermediate in intermediates
+                self._prep_vid_for_wandb(x[0])
             ],
         }, step=step)
         print("Generation logged.")
@@ -128,12 +140,21 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    wandb.init(project="flying-mnist_tiny-diffuser-2")
+    # Args:
+    parser = argparse.ArgumentParser()
+    # checkpoint arg:
+    parser.add_argument("--checkpoint", "-m", type=str, default=None)
+    args = parser.parse_args()
+
+    wandb.init(project="flying-mnist_tiny-diffuser-Aai-1")
 
     kwargs = {
-        "device": "cuda:1",
+        "device": "cuda:0",
         "batch_size": 32,
+        "checkpoint": args.checkpoint,
+        "use_sprites": True,
     }
+    wandb.config.update(kwargs)
 
     trainer = Trainer(**kwargs)
     trainer.train()

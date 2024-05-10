@@ -81,7 +81,7 @@ class Trainer:
             y, mu, logvar = self.model(
                 # Random erasing.
                 torch.stack([
-                    self._remove_random_frame(vid)
+                    self._remove_random_frames(vid)
                     for vid in x
                 ])
             )
@@ -113,7 +113,12 @@ class Trainer:
         with torch.no_grad():
             for batch_idx, batch in pbar:
                 x = batch.to(self.args.device)
-                y, mu, logvar = self.model(x)
+                y, mu, logvar = self.model(
+                    torch.stack([
+                        self._remove_random_frames(vid)
+                        for vid in x
+                    ])
+                )
                 loss = self._calc_loss(batch_idx=batch_idx, output=y, mu=mu, logvar=logvar, target=x)
                 loss = loss / self.args.gradient_accumulation
 
@@ -128,7 +133,7 @@ class Trainer:
                 # Pick 3 random images from the test set and log the input and output.
                 x = Trainer._get_random_video_from_dataloader(self.test_loader).unsqueeze(0).to(self.args.device)
                 x = torch.stack([
-                    self._remove_random_frame(vid)
+                    self._remove_random_frames(vid)
                     for vid in x
                 ])
                 y, _, _ = self.model(x)
@@ -183,13 +188,21 @@ class Trainer:
         return vid
 
     @staticmethod
-    def _remove_random_frame(vid: torch.Tensor) -> torch.Tensor:
+    def _remove_random_frames(vid: torch.Tensor) -> torch.Tensor:
         # t is second dimension.
-        t = vid.shape[1]
-        frame_idx = random.randint(0, t - 1)
-        # copy vid and set frame to random noise.
         vid = vid.clone()
-        vid[:, frame_idx] = torch.randn_like(vid[:, frame_idx])
+        t = vid.shape[1]
+        last_frame_removed = -1
+        for _ in range(t // 2):
+            first_frame_available = last_frame_removed + 1
+            last_frame_available = t - 1
+            if first_frame_available > last_frame_available:
+                break
+            # `randint` includes both endpoints.
+            frame_idx = random.randint(first_frame_available, last_frame_available)
+            # copy vid and set frame to random noise.
+            # vid[:, frame_idx] = torch.randn_like(vid[:, frame_idx])
+            vid[:, frame_idx] = torch.zeros_like(vid[:, frame_idx])
         return vid
 
     @staticmethod
