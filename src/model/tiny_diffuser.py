@@ -64,11 +64,12 @@ class TinyDiffuser(torch.nn.Module):
         with torch.no_grad():
             for t in tqdm(sampling_timesteps, desc="Generating video"):
                 predicted_noise = self(img)
-                x_0 = self.noise_scheduler.predict_start_from_noise(
-                    x_t = img,
-                    t = t,
-                    noise = predicted_noise,
-                )
+                # x_0 = self.noise_scheduler.predict_start_from_noise(
+                #     x_t = img,
+                #     t = t,
+                #     noise = predicted_noise,
+                # )
+                x_0 = img - predicted_noise
                 x_t_1 = self.noise_scheduler.q_posterior(
                     x_start = x_0,
                     x_t = img,

@@ -32,7 +32,7 @@ class Trainer:
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
         self.test_dataloader = torch.utils.data.DataLoader(self.test_dataset, batch_size=kwargs.get("batch_size"), shuffle=False)
 
-        self.optimizer = torch.optim.AdamW(self.diffuser.parameters(), lr=3e-5)
+        self.optimizer = torch.optim.AdamW(self.diffuser.parameters(), lr=1e-5)
 
     def train(self):
         step = 0
@@ -65,6 +65,7 @@ class Trainer:
             self.optimizer.step()
 
         wandb.log({"train_loss": total_loss / count}, step=step)
+        print(f"Train loss: {total_loss / count}")
 
     def _save_checkpoint(self, step: int):
         checkpoint_dir = Path("checkpoints") / wandb.run.project / wandb.run.name
@@ -83,27 +84,33 @@ class Trainer:
             count += 1
 
         wandb.log({"test_loss": total_loss / count}, step=step)
+        print(f"Test loss: {total_loss / count}")
 
     def _train_inner(self, x: torch.Tensor):
         x_noisy, t, noise = self.diffuser.create_noised_image(x)
         predicted_noise = self.diffuser(x_noisy)
-        return torch.nn.functional.mse_loss(predicted_noise, noise)
+        # x_pred = self.diffuser.noise_scheduler.predict_start_from_noise(
+        #     x_t=x_noisy,
+        #     t=t,
+        #     noise=predicted_noise,
+        # )
+        # return torch.nn.functional.mse_loss(x, x_pred)
+        return torch.nn.functional.mse_loss(predicted_noise, x_noisy - x)
 
     def _sample(self, step: int):
         num_test_samples = len(self.test_dataset)
         random_test_sample_idx = random.randint(0, num_test_samples - 1)
         x = self.test_dataset[random_test_sample_idx].unsqueeze(0).to(self.device)
         with torch.no_grad():
-            t = self.diffuser.total_timesteps // 5
+            t = 100
             x_noisy, t_b, noise = self.diffuser.create_noised_image(x, t=t)
             predicted_noise = self.diffuser(x_noisy)
-            # predicted_x_0 = x_noisy - predicted_noise
-            predicted_x_0 = self.diffuser.noise_scheduler.predict_start_from_noise(
-                x_t=x_noisy,
-                t=t_b,
-                noise=predicted_noise,
-            )
-
+            predicted_x_0 = x_noisy - predicted_noise
+            # predicted_x_0 = self.diffuser.noise_scheduler.predict_start_from_noise(
+            #     x_t=x_noisy,
+            #     t=t_b,
+            #     noise=predicted_noise,
+            # )
         wandb.log({
             "original": self._prep_vid_for_wandb(x[0]),
             "noisy": self._prep_vid_for_wandb(x_noisy[0]),
