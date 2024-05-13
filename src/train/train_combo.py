@@ -9,6 +9,7 @@ from src.model.tiny_diffuser import TinyDiffuser
 from src.model.tiny_autoencoder import TinyAutoencoder
 
 from src.dataset.flying_mnist_dataset import FlyingMnistDataset
+from src.dataset.sprites_dataset import SpritesDataset
 
 class Trainer:
     def __init__(self, **kwargs):
@@ -17,11 +18,13 @@ class Trainer:
         self.vae = TinyAutoencoder()
         self.vae.to(self.device)
 
-        self.diffuser = TinyDiffuser(in_channels=16)
+        self.diffuser = TinyDiffuser(in_channels=64)
         self.diffuser.to(self.device)
 
-        self.train_dataset = FlyingMnistDataset("train", max_samples=1000)
-        self.test_dataset = FlyingMnistDataset("val", max_samples=100)
+        # self.train_dataset = FlyingMnistDataset("train", max_samples=1000)
+        # self.test_dataset = FlyingMnistDataset("val", max_samples=100)
+        sprites_dataset = SpritesDataset()
+        self.train_dataset, self.test_dataset = sprites_dataset.randomly_split(0.85)
 
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
         self.test_dataloader = torch.utils.data.DataLoader(self.test_dataset, batch_size=kwargs.get("batch_size"), shuffle=False)
@@ -36,14 +39,16 @@ class Trainer:
         while True:
             self._train(step)
             self._test(step)
-            self._sample(step)
-            self._generate(step)
-            wandb.run.save()
+            if step % 20 == 0:
+                self._sample(step)
+                self._generate(step)
+                wandb.run.save()
             print()
             step += 1
 
     def _train(self, step: int):
         self.diffuser.train()
+        self.vae.train()
         total_loss = 0.0
         total_image_loss = 0
         total_noise_loss = 0
@@ -72,23 +77,25 @@ class Trainer:
 
     def _test(self, step: int):
         self.diffuser.eval()
+        self.vae.eval()
         total_loss = 0.0
         total_image_loss = 0
         total_noise_loss = 0
         count = 0
         pbar = tqdm(self.test_dataloader, desc=f"({wandb.run.name}) Test ({step})")
-        for x in pbar:
-            image_loss, noise_loss = self._train_inner(
-                x.to(self.device),
-                pbar=pbar,
-            )
-            total_image_loss += image_loss.item()
-            total_noise_loss += noise_loss.item()
+        with torch.no_grad():
+            for x in pbar:
+                image_loss, noise_loss = self._train_inner(
+                    x.to(self.device),
+                    pbar=pbar,
+                )
+                total_image_loss += image_loss.item()
+                total_noise_loss += noise_loss.item()
 
-            loss = image_loss + noise_loss
-            total_loss += loss.item()
+                loss = image_loss + noise_loss
+                total_loss += loss.item()
 
-            count += 1
+                count += 1
 
         wandb.log({"test_loss": total_loss / count}, step=step)
         wandb.log({"test_image_loss": total_image_loss / count}, step=step)
@@ -111,13 +118,13 @@ class Trainer:
                 for vid in x
             ]),
         )
-        latent_noise = self.diffuser.create_noise(latent)
-        noisy_latent = latent + latent_noise
-        latent_noise_p = self.diffuser(latent + latent_noise)
-        denoised_latent = noisy_latent - latent_noise_p
-        x_p = self.vae.decode(denoised_latent)
-        img_loss = torch.nn.functional.mse_loss(x_p, x)
-        noise_loss = torch.nn.functional.mse_loss(latent_noise, latent_noise_p)
+        latent_noisy, t, noise = self.diffuser.create_noised_image(latent)
+        predicted_noise = self.diffuser(latent_noisy)
+        actual_noise = latent_noisy - latent
+        latent_0 = latent_noisy - predicted_noise
+        x_0 = self.vae.decode(latent_0)
+        img_loss = torch.nn.functional.mse_loss(x_0, x)
+        noise_loss = torch.nn.functional.mse_loss(predicted_noise, actual_noise)
         pbar.set_postfix({"Image Loss": img_loss.item(), "Noise Loss": noise_loss.item()})
         return img_loss, noise_loss
 
@@ -128,36 +135,28 @@ class Trainer:
         with torch.no_grad():
             latent = self.vae.encode(x)
             print("latent shape:", latent.shape)
-            latent_noise = self.diffuser.create_noise(latent, t=self.diffuser.total_timesteps * 2 // 3)
-            noisy_latent = latent + latent_noise
-            latent_noise_p = self.diffuser(noisy_latent)
-            denoised_latent = noisy_latent - latent_noise_p
-            x_p = self.vae.decode(denoised_latent)
+            assert latent.shape == (1, 64, 8, 4, 4)
+            t = 100
+            latent_noisy, t_b, noise = self.diffuser.create_noised_image(latent, t=t)
+            predicted_noise = self.diffuser(latent_noisy)
+            predicted_latent_0 = latent_noisy - predicted_noise
+            x_p = self.vae.decode(predicted_latent_0)
         wandb.log({
             "original": self._prep_vid_for_wandb(x[0]),
-            "noisy": self._prep_vid_for_wandb(self.vae.decode(noisy_latent)[0]),
-            "predicted_noise": self._prep_vid_for_wandb(self.vae.decode(latent_noise_p)[0]),
             "decoded": self._prep_vid_for_wandb(x_p[0]),
         }, step=step)
         print("Samples logged.")
 
     def _generate(self, step: int):
         with torch.no_grad():
-            latent = torch.randn(1, 16, 4, 64, 64).to(self.device)
+            latent = self.diffuser.generate(
+                torch.randn(1, 64, 8, 4, 4).to(self.device),
+            )
             intermediates = [
                 self.vae.decode(latent)[0].clone()
             ]
-            for t in tqdm(range(self.diffuser.total_timesteps), desc="Generating"):
-                noise_p = self.diffuser(latent)
-                latent_t_0 = latent - noise_p
-                noise_tm1 = self.diffuser.create_noise(latent, t=t)
-                latent = latent_t_0 + noise_tm1
-                if (t + 1) % 250 == 0:
-                    intermediates.append(
-                        self.vae.decode(latent)[0].clone(),
-                    )
         wandb.log({
-            "generated_2": [
+            "generated": [
                 self._prep_vid_for_wandb(intermediate)
                 for intermediate in intermediates
             ],
@@ -166,6 +165,7 @@ class Trainer:
 
     @staticmethod
     def _remove_random_frame(vid: torch.Tensor) -> torch.Tensor:
+        return vid
         # t is second dimension.
         t = vid.shape[1]
         frame_idx = random.randint(0, t - 1)
@@ -186,7 +186,7 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    wandb.init(project="flying-mnist_tiny-combo")
+    wandb.init(project="flying-mnist_tiny-combo-2")
 
     kwargs = {
         "device": "cuda:1",

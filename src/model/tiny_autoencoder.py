@@ -13,7 +13,7 @@ class EncoderBlock(torch.nn.Module):
         return self.layers(x)
 
 # [b, 3, 8, 128, 128].
-# [b, 32, 8, 32, 32].
+# [b, 64, 8, 8, 8].
 
 class DecoderBlock(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int, include_relu: bool):
@@ -37,6 +37,8 @@ class Encoder(torch.nn.Module):
     def forward(self, x):
         x = self.conv1(x)
         x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
         return x
 
 class Decoder(torch.nn.Module):
@@ -47,6 +49,8 @@ class Decoder(torch.nn.Module):
         self.conv2 = DecoderBlock(in_channels=32, out_channels=32, include_relu=True)
         self.conv1 = DecoderBlock(in_channels=32, out_channels=3, include_relu=False)
     def forward(self, x):
+        x = self.conv4(x)
+        x = self.conv3(x)
         x = self.conv2(x)
         x = self.conv1(x)
         # clamp to 0-1.

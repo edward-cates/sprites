@@ -32,7 +32,7 @@ class Trainer:
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
         self.test_dataloader = torch.utils.data.DataLoader(self.test_dataset, batch_size=kwargs.get("batch_size"), shuffle=False)
 
-        self.optimizer = torch.optim.AdamW(self.diffuser.parameters(), lr=1e-5)
+        self.optimizer = torch.optim.AdamW(self.diffuser.parameters(), lr=7e-6)
 
     def train(self):
         step = 0
