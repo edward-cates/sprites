@@ -1,4 +1,6 @@
 import random
+from typing import Optional
+from pathlib import Path
 
 from tqdm import tqdm
 import wandb
@@ -21,27 +23,36 @@ class Trainer:
         self.diffuser = TinyDiffuser(in_channels=64)
         self.diffuser.to(self.device)
 
-        # self.train_dataset = FlyingMnistDataset("train", max_samples=1000)
-        # self.test_dataset = FlyingMnistDataset("val", max_samples=100)
-        sprites_dataset = SpritesDataset()
-        self.train_dataset, self.test_dataset = sprites_dataset.randomly_split(0.85)
+        if kwargs.get("use_sprites") is not True:
+            self.train_dataset = FlyingMnistDataset("train")#, max_samples=1000)
+            self.test_dataset = FlyingMnistDataset("val")#, max_samples=100)
+        else:
+            sprites_dataset = SpritesDataset()
+            self.train_dataset, self.test_dataset = sprites_dataset.randomly_split(0.9)
 
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
         self.test_dataloader = torch.utils.data.DataLoader(self.test_dataset, batch_size=kwargs.get("batch_size"), shuffle=False)
 
         self.optimizer = torch.optim.AdamW(
-            list(self.vae.parameters()) + list(self.diffuser.parameters()),
-            lr=1e-4,
+            [
+                {"params": self.vae.parameters()},
+                {"params": self.diffuser.parameters()},
+            ],
+            lr=1e-3,
+            weight_decay=1e-3,
         )
+
+        self.latent_shape = None
 
     def train(self):
         step = 0
         while True:
             self._train(step)
             self._test(step)
-            if step % 20 == 0:
+            if step % 10 == 0 or True:
                 self._sample(step)
                 self._generate(step)
+                self._save_models(step)
                 wandb.run.save()
             print()
             step += 1
@@ -67,9 +78,12 @@ class Trainer:
             total_loss += loss.item()
             count += 1
 
-            self.optimizer.zero_grad()
             loss.backward()
+            # clip gradients.
+            torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 0.5)
+            torch.nn.utils.clip_grad_norm_(self.diffuser.parameters(), 0.5)
             self.optimizer.step()
+            self.optimizer.zero_grad()
 
         wandb.log({"train_loss": total_loss / count}, step=step)
         wandb.log({"train_image_loss": total_image_loss / count}, step=step)
@@ -123,8 +137,11 @@ class Trainer:
         actual_noise = latent_noisy - latent
         latent_0 = latent_noisy - predicted_noise
         x_0 = self.vae.decode(latent_0)
-        img_loss = torch.nn.functional.mse_loss(x_0, x)
-        noise_loss = torch.nn.functional.mse_loss(predicted_noise, actual_noise)
+        x_ae = self.vae.decode(latent)
+        ae_loss = torch.nn.functional.mse_loss(x_ae, x, reduction='mean')
+        img_loss = torch.nn.functional.mse_loss(x_0, x, reduction='mean') # 100 is observed to be a good scaling factor.
+        img_loss = (img_loss + ae_loss) * 100
+        noise_loss = torch.nn.functional.mse_loss(predicted_noise, actual_noise, reduction='mean')
         pbar.set_postfix({"Image Loss": img_loss.item(), "Noise Loss": noise_loss.item()})
         return img_loss, noise_loss
 
@@ -135,7 +152,9 @@ class Trainer:
         with torch.no_grad():
             latent = self.vae.encode(x)
             print("latent shape:", latent.shape)
-            assert latent.shape == (1, 64, 8, 4, 4)
+            # assert latent.shape == (1, 64, 8, 4, 4)
+            if self.latent_shape is None:
+                self.latent_shape = latent.shape
             t = 100
             latent_noisy, t_b, noise = self.diffuser.create_noised_image(latent, t=t)
             predicted_noise = self.diffuser(latent_noisy)
@@ -150,7 +169,8 @@ class Trainer:
     def _generate(self, step: int):
         with torch.no_grad():
             latent = self.diffuser.generate(
-                torch.randn(1, 64, 8, 4, 4).to(self.device),
+                # torch.randn(1, 64, 8, 4, 4).to(self.device),
+                torch.randn(1, *self.latent_shape[1:]).to(self.device),
             )
             intermediates = [
                 self.vae.decode(latent)[0].clone()
@@ -184,13 +204,21 @@ class Trainer:
         vid = (vid * 255).to(torch.uint8)
         return wandb.Video(vid)
 
+    def _save_models(self, step: int):
+        # Save checkpoint to disk.
+        checkpoint_dir = Path("checkpoints") / wandb.run.project / wandb.run.name
+        checkpoint_dir.mkdir(exist_ok=True, parents=True)
+        torch.save(self.diffuser.state_dict(), str(checkpoint_dir / f"diffuser_at_step_{step}.pth"))
+        torch.save(self.vae.state_dict(), str(checkpoint_dir / f"vae_at_step_{step}.pth"))
+
 
 if __name__ == "__main__":
     wandb.init(project="flying-mnist_tiny-combo-2")
 
     kwargs = {
-        "device": "cuda:1",
+        "device": "cuda:0",
         "batch_size": 32,
+        "use_sprites": False,
     }
 
     trainer = Trainer(**kwargs)

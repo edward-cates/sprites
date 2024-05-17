@@ -189,6 +189,7 @@ class Trainer:
 
     @staticmethod
     def _remove_random_frames(vid: torch.Tensor) -> torch.Tensor:
+        return vid
         # t is second dimension.
         vid = vid.clone()
         t = vid.shape[1]

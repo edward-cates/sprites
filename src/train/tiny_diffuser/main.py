@@ -27,7 +27,7 @@ class Trainer:
             self.test_dataset = FlyingMnistDataset("val", max_samples=400)
         else:
             sprites_dataset = SpritesDataset()
-            self.train_dataset, self.test_dataset = sprites_dataset.randomly_split(0.85)
+            self.train_dataset, self.test_dataset = sprites_dataset.randomly_split(0.9)
 
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
         self.test_dataloader = torch.utils.data.DataLoader(self.test_dataset, batch_size=kwargs.get("batch_size"), shuffle=False)
