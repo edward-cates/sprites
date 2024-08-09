@@ -13,6 +13,7 @@ from src.model.tiny_autoencoder import TinyAutoencoder
 from src.dataset.flying_mnist_dataset import FlyingMnistDataset
 from src.dataset.sprites_dataset import SpritesDataset
 from src.dataset.virat_dataset import ViratDataset
+from src.dataset.pexels_dataset import PexelsDataset
 
 class Trainer:
     def __init__(self, **kwargs):
@@ -36,7 +37,8 @@ class Trainer:
         #     sprites_dataset = SpritesDataset()
         #     self.train_dataset, self.test_dataset = sprites_dataset.randomly_split(0.9)
 
-        dataset = ViratDataset.from_tiny_virat(max_samples=7000)
+        # dataset = ViratDataset.from_tiny_virat(max_samples=7000)
+        dataset = PexelsDataset.from_tiny_virat(max_samples=7000)
         self.train_dataset, self.test_dataset = dataset.split(0.9)
 
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
@@ -47,8 +49,8 @@ class Trainer:
                 {"params": self.vae.parameters()},
                 {"params": self.diffuser.parameters()},
             ],
-            lr=1e-4,
-            weight_decay=1e-4,
+            lr=1e-5,
+            weight_decay=1e-5,
         )
 
         self.latent_shape = None
@@ -58,7 +60,7 @@ class Trainer:
         while True:
             self._train(step)
             self._test(step)
-            if step % 10 == 0 or True:
+            if step % 10 == 0:
                 self._sample(step)
                 self._generate(step)
                 self._save_models(step)
@@ -235,7 +237,7 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    wandb.init(project="flying-mnist_tiny-combo-2")
+    wandb.init(project="dogs")
 
     kwargs = {
         "device": "cuda:0",
