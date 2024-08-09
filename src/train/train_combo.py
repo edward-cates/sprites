@@ -12,23 +12,32 @@ from src.model.tiny_autoencoder import TinyAutoencoder
 
 from src.dataset.flying_mnist_dataset import FlyingMnistDataset
 from src.dataset.sprites_dataset import SpritesDataset
+from src.dataset.virat_dataset import ViratDataset
 
 class Trainer:
     def __init__(self, **kwargs):
         self.device = kwargs.get("device")
 
+        previous_checkpoint_dir = Path("checkpoints/flying-mnist_tiny-combo-2/golden-butterfly-31")
+        previous_checkpoint_step = 400
+
         self.vae = TinyAutoencoder()
+        # self.vae.load_state_dict(torch.load(str(previous_checkpoint_dir / f"vae_at_step_{previous_checkpoint_step}.pth")))
         self.vae.to(self.device)
 
-        self.diffuser = TinyDiffuser(in_channels=64)
+        self.diffuser = TinyDiffuser(in_channels=128)
+        # self.diffuser.load_state_dict(torch.load(str(previous_checkpoint_dir / f"diffuser_at_step_{previous_checkpoint_step}.pth")))
         self.diffuser.to(self.device)
 
-        if kwargs.get("use_sprites") is not True:
-            self.train_dataset = FlyingMnistDataset("train")#, max_samples=1000)
-            self.test_dataset = FlyingMnistDataset("val")#, max_samples=100)
-        else:
-            sprites_dataset = SpritesDataset()
-            self.train_dataset, self.test_dataset = sprites_dataset.randomly_split(0.9)
+        # if kwargs.get("use_sprites") is not True:
+        #     self.train_dataset = FlyingMnistDataset("train")#, max_samples=1000)
+        #     self.test_dataset = FlyingMnistDataset("val")#, max_samples=100)
+        # else:
+        #     sprites_dataset = SpritesDataset()
+        #     self.train_dataset, self.test_dataset = sprites_dataset.randomly_split(0.9)
+
+        dataset = ViratDataset.from_tiny_virat(max_samples=7000)
+        self.train_dataset, self.test_dataset = dataset.split(0.9)
 
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
         self.test_dataloader = torch.utils.data.DataLoader(self.test_dataset, batch_size=kwargs.get("batch_size"), shuffle=False)
@@ -38,8 +47,8 @@ class Trainer:
                 {"params": self.vae.parameters()},
                 {"params": self.diffuser.parameters()},
             ],
-            lr=1e-3,
-            weight_decay=1e-3,
+            lr=1e-4,
+            weight_decay=1e-4,
         )
 
         self.latent_shape = None
@@ -139,11 +148,24 @@ class Trainer:
         x_0 = self.vae.decode(latent_0)
         x_ae = self.vae.decode(latent)
         ae_loss = torch.nn.functional.mse_loss(x_ae, x, reduction='mean')
-        img_loss = torch.nn.functional.mse_loss(x_0, x, reduction='mean') # 100 is observed to be a good scaling factor.
-        img_loss = (img_loss + ae_loss) * 100
+        ae_transition_loss = self._calc_transition_loss(x_ae, x)
+        img_loss = torch.nn.functional.mse_loss(x_0, x, reduction='mean')
+        img_transition_loss = self._calc_transition_loss(x_0, x)
+        # 100 is observed to be a good scaling factor.
+        img_loss = (img_loss + img_transition_loss + ae_loss + ae_transition_loss) / 4.0 * 50.0
         noise_loss = torch.nn.functional.mse_loss(predicted_noise, actual_noise, reduction='mean')
         pbar.set_postfix({"Image Loss": img_loss.item(), "Noise Loss": noise_loss.item()})
         return img_loss, noise_loss
+
+    @staticmethod
+    def _calc_transition_loss(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        x = Trainer._calc_transitions(x)
+        y = Trainer._calc_transitions(y)
+        return torch.nn.functional.mse_loss(x, y, reduction='mean')
+
+    @staticmethod
+    def _calc_transitions(x: torch.Tensor) -> torch.Tensor:
+        return x[:, 1:] - x[:, :-1]
 
     def _sample(self, step: int):
         num_test_samples = len(self.test_dataset)
@@ -217,7 +239,7 @@ if __name__ == "__main__":
 
     kwargs = {
         "device": "cuda:0",
-        "batch_size": 32,
+        "batch_size": 16,
         "use_sprites": False,
     }
 

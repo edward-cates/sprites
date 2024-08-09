@@ -3,23 +3,26 @@
 import torch
 
 class EncoderBlock(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
+    def __init__(self, in_channels: int, out_channels: int, compress: bool):
         super().__init__()
+        s = 2 if compress else 1
         self.layers = torch.nn.Sequential(
-            torch.nn.Conv3d(in_channels, out_channels, kernel_size=5, stride=(1, 2, 2), padding=2, bias=False),
+            torch.nn.Conv3d(in_channels, out_channels, kernel_size=5, stride=(1, s, s), padding=2, bias=False),
             torch.nn.ReLU(),
         )
     def forward(self, x):
         return self.layers(x)
 
 # [b, 3, 8, 128, 128].
-# [b, 64, 8, 8, 8].
+# [b, 128, 8, 2, 2]. -> 4096
 
 class DecoderBlock(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, include_relu: bool):
+    def __init__(self, in_channels: int, out_channels: int, decompress: bool, include_relu: bool = True):
         super().__init__()
+        k = 6 if decompress else 5
+        s = 2 if decompress else 1
         layers = [
-            torch.nn.ConvTranspose3d(in_channels, out_channels, kernel_size=(5, 6, 6), stride=(1, 2, 2), padding=2, bias=False),
+            torch.nn.ConvTranspose3d(in_channels, out_channels, kernel_size=(5, k, k), stride=(1, s, s), padding=2, bias=False),
         ]
         if include_relu:
             layers.append(torch.nn.ReLU())
@@ -30,29 +33,56 @@ class DecoderBlock(torch.nn.Module):
 class Encoder(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = EncoderBlock(in_channels=3, out_channels=32)
-        self.conv2 = EncoderBlock(in_channels=32, out_channels=32)
-        self.conv3 = EncoderBlock(in_channels=32, out_channels=64)
-        self.conv4 = EncoderBlock(in_channels=64, out_channels=64)
+        self.block1 = torch.nn.Sequential(
+            EncoderBlock(in_channels=3, out_channels=32, compress=False),
+            EncoderBlock(in_channels=32, out_channels=32, compress=False),
+            EncoderBlock(in_channels=32, out_channels=32, compress=True),
+            EncoderBlock(in_channels=32, out_channels=32, compress=True),
+        )
+        self.block2 = torch.nn.Sequential(
+            EncoderBlock(in_channels=32, out_channels=64, compress=False),
+            EncoderBlock(in_channels=64, out_channels=64, compress=False),
+            EncoderBlock(in_channels=64, out_channels=64, compress=True),
+            EncoderBlock(in_channels=64, out_channels=64, compress=True),
+        )
+        self.block3 = torch.nn.Sequential(
+            EncoderBlock(in_channels=64, out_channels=128, compress=False),
+            EncoderBlock(in_channels=128, out_channels=128, compress=False),
+            EncoderBlock(in_channels=128, out_channels=128, compress=True),
+            EncoderBlock(in_channels=128, out_channels=128, compress=True),
+        )
+
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
         return x
 
 class Decoder(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv4 = DecoderBlock(in_channels=64, out_channels=64, include_relu=True)
-        self.conv3 = DecoderBlock(in_channels=64, out_channels=32, include_relu=True)
-        self.conv2 = DecoderBlock(in_channels=32, out_channels=32, include_relu=True)
-        self.conv1 = DecoderBlock(in_channels=32, out_channels=3, include_relu=False)
+        self.block3 = torch.nn.Sequential(
+            DecoderBlock(in_channels=128, out_channels=128, decompress=True),
+            DecoderBlock(in_channels=128, out_channels=128, decompress=True),
+            DecoderBlock(in_channels=128, out_channels=128, decompress=False),
+            DecoderBlock(in_channels=128, out_channels=64, decompress=False),
+        )
+        self.block2 = torch.nn.Sequential(
+            DecoderBlock(in_channels=64, out_channels=64, decompress=True),
+            DecoderBlock(in_channels=64, out_channels=64, decompress=True),
+            DecoderBlock(in_channels=64, out_channels=64, decompress=False),
+            DecoderBlock(in_channels=64, out_channels=32, decompress=False),
+        )
+        self.block1 = torch.nn.Sequential(
+            DecoderBlock(in_channels=32, out_channels=32, decompress=True),
+            DecoderBlock(in_channels=32, out_channels=32, decompress=True),
+            DecoderBlock(in_channels=32, out_channels=32, decompress=False),
+            DecoderBlock(in_channels=32, out_channels=3, decompress=False, include_relu=False),
+        )
     def forward(self, x):
-        x = self.conv4(x)
-        x = self.conv3(x)
-        x = self.conv2(x)
-        x = self.conv1(x)
+        x = self.block3(x)
+        x = self.block2(x)
+        x = self.block1(x)
         # clamp to 0-1.
         x = torch.clamp(x, 0, 1)
         return x
@@ -95,6 +125,7 @@ class TinyAutoencoder(torch.nn.Module):
     def forward(self, x):
         # latent, mu, logvar = self.encode(x)
         latent = self.encode(x)
+        # print("latent shape:", latent.shape)
         y = self.decode(latent)
         assert x.shape == y.shape, f"{x.shape} != {y.shape}"
         return y, 0, 0
