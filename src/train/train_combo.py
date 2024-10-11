@@ -14,13 +14,13 @@ from src.dataset.flying_mnist_dataset import FlyingMnistDataset
 from src.dataset.sprites_dataset import SpritesDataset
 from src.dataset.virat_dataset import ViratDataset
 from src.dataset.pexels_dataset import PexelsDataset
-
+from src.dataset.fingers_dataset import FingersDataset
 class Trainer:
     def __init__(self, **kwargs):
         self.device = kwargs.get("device")
 
-        previous_checkpoint_dir = Path("checkpoints/flying-mnist_tiny-combo-2/golden-butterfly-31")
-        previous_checkpoint_step = 400
+        # previous_checkpoint_dir = Path("checkpoints/flying-mnist_tiny-combo-2/golden-butterfly-31")
+        # previous_checkpoint_step = 400
 
         self.vae = TinyAutoencoder()
         # self.vae.load_state_dict(torch.load(str(previous_checkpoint_dir / f"vae_at_step_{previous_checkpoint_step}.pth")))
@@ -38,8 +38,9 @@ class Trainer:
         #     self.train_dataset, self.test_dataset = sprites_dataset.randomly_split(0.9)
 
         # dataset = ViratDataset.from_tiny_virat(max_samples=7000)
-        dataset = PexelsDataset.from_tiny_virat(max_samples=7000)
-        self.train_dataset, self.test_dataset = dataset.split(0.9)
+        # dataset = PexelsDataset.from_tiny_virat(max_samples=7000)
+        dataset = FingersDataset.from_tiny_virat(max_samples=7000)
+        self.train_dataset, self.test_dataset = dataset, dataset
 
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset, batch_size=kwargs.get("batch_size"), shuffle=True)
         self.test_dataloader = torch.utils.data.DataLoader(self.test_dataset, batch_size=kwargs.get("batch_size"), shuffle=False)
@@ -85,7 +86,8 @@ class Trainer:
             total_image_loss += image_loss.item()
             total_noise_loss += noise_loss.item()
 
-            loss = image_loss + noise_loss
+            # loss = image_loss + noise_loss
+            loss = (1 + torch.log(1 + image_loss)) * (1 + torch.log(1 + noise_loss))
             total_loss += loss.item()
             count += 1
 
@@ -136,13 +138,15 @@ class Trainer:
         5. Decode. -> Decoded.
         Loss = MSE(Original., Decoded) + MSE(Noise, Predicted Noise)
         """
-        latent = self.vae.encode(
-            # Random erasing.
-            torch.stack([
-                self._remove_random_frame(vid)
-                for vid in x
-            ]),
-        )
+        # latent = self.vae.encode(
+        #     # Random erasing.
+        #     torch.stack([
+        #         self._remove_random_frame(vid)
+        #         for vid in x
+        #     ]),
+        # )
+        # don't do random erasing.
+        latent = self.vae.encode(x)
         latent_noisy, t, noise = self.diffuser.create_noised_image(latent)
         predicted_noise = self.diffuser(latent_noisy)
         actual_noise = latent_noisy - latent
@@ -237,11 +241,11 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    wandb.init(project="dogs")
+    wandb.init(project="fingers")
 
     kwargs = {
         "device": "cuda:0",
-        "batch_size": 16,
+        "batch_size": 8,
         "use_sprites": False,
     }
 
