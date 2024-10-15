@@ -9,6 +9,7 @@ from einops import rearrange
 
 from src.model.tiny_diffuser import TinyDiffuser
 from src.model.tiny_autoencoder import TinyAutoencoder
+from src.model.text_encoder import TextEncoder
 
 from src.dataset.flying_mnist_dataset import FlyingMnistDataset
 from src.dataset.sprites_dataset import SpritesDataset
@@ -19,16 +20,23 @@ class Trainer:
     def __init__(self, **kwargs):
         self.device = kwargs.get("device")
 
-        # previous_checkpoint_dir = Path("checkpoints/flying-mnist_tiny-combo-2/golden-butterfly-31")
-        # previous_checkpoint_step = 400
+        previous_checkpoint_dir = None # Path("checkpoints/fingers/twilight-brook-8")
+        previous_checkpoint_step = 58000
 
         self.vae = TinyAutoencoder()
-        # self.vae.load_state_dict(torch.load(str(previous_checkpoint_dir / f"vae_at_step_{previous_checkpoint_step}.pth")))
+        if previous_checkpoint_dir is not None:
+            self.vae.load_state_dict(torch.load(str(previous_checkpoint_dir / f"vae_at_step_{previous_checkpoint_step}.pth")))
         self.vae.to(self.device)
 
         self.diffuser = TinyDiffuser(in_channels=128)
-        # self.diffuser.load_state_dict(torch.load(str(previous_checkpoint_dir / f"diffuser_at_step_{previous_checkpoint_step}.pth")))
+        if previous_checkpoint_dir is not None:
+            self.diffuser.load_state_dict(torch.load(str(previous_checkpoint_dir / f"diffuser_at_step_{previous_checkpoint_step}.pth")))
         self.diffuser.to(self.device)
+
+        self.text_encoder = TextEncoder()
+        if previous_checkpoint_dir is not None:
+            self.text_encoder.load_state_dict(torch.load(str(previous_checkpoint_dir / f"text_encoder_at_step_{previous_checkpoint_step}.pth")))
+        self.text_encoder.to(self.device)
 
         # if kwargs.get("use_sprites") is not True:
         #     self.train_dataset = FlyingMnistDataset("train")#, max_samples=1000)
@@ -49,9 +57,10 @@ class Trainer:
             [
                 {"params": self.vae.parameters()},
                 {"params": self.diffuser.parameters()},
+                {"params": self.text_encoder.parameters()},
             ],
-            lr=1e-5,
-            weight_decay=1e-5,
+            lr=1e-3,
+            weight_decay=0.05, # default is 0.01
         )
 
         self.latent_shape = None
@@ -61,7 +70,7 @@ class Trainer:
         while True:
             self._train(step)
             self._test(step)
-            if step % 10 == 0:
+            if step % 1000 == 0:
                 self._sample(step)
                 self._generate(step)
                 self._save_models(step)
@@ -72,14 +81,16 @@ class Trainer:
     def _train(self, step: int):
         self.diffuser.train()
         self.vae.train()
+        self.text_encoder.train()
         total_loss = 0.0
         total_image_loss = 0
         total_noise_loss = 0
         count = 0
         pbar = tqdm(self.train_dataloader, desc=f"({wandb.run.name}) Train ({step})")
-        for x in pbar:
+        for x, labels in pbar:
             image_loss, noise_loss = self._train_inner(
                 x.to(self.device),
+                labels.to(self.device),
                 pbar=pbar,
             )
 
@@ -105,15 +116,17 @@ class Trainer:
     def _test(self, step: int):
         self.diffuser.eval()
         self.vae.eval()
+        self.text_encoder.eval()
         total_loss = 0.0
         total_image_loss = 0
         total_noise_loss = 0
         count = 0
         pbar = tqdm(self.test_dataloader, desc=f"({wandb.run.name}) Test ({step})")
         with torch.no_grad():
-            for x in pbar:
+            for x, labels in pbar:
                 image_loss, noise_loss = self._train_inner(
                     x.to(self.device),
+                    labels.to(self.device),
                     pbar=pbar,
                 )
                 total_image_loss += image_loss.item()
@@ -128,7 +141,7 @@ class Trainer:
         wandb.log({"test_image_loss": total_image_loss / count}, step=step)
         wandb.log({"test_noise_loss": total_noise_loss / count}, step=step)
 
-    def _train_inner(self, x: torch.Tensor, pbar):
+    def _train_inner(self, x: torch.Tensor, labels: torch.Tensor, pbar):
         """
         (Original).
         1. Encode.
@@ -148,7 +161,8 @@ class Trainer:
         # don't do random erasing.
         latent = self.vae.encode(x)
         latent_noisy, t, noise = self.diffuser.create_noised_image(latent)
-        predicted_noise = self.diffuser(latent_noisy)
+        context = self.text_encoder(labels)
+        predicted_noise = self.diffuser(latent_noisy, context=context)
         actual_noise = latent_noisy - latent
         latent_0 = latent_noisy - predicted_noise
         x_0 = self.vae.decode(latent_0)
@@ -176,7 +190,10 @@ class Trainer:
     def _sample(self, step: int):
         num_test_samples = len(self.test_dataset)
         random_test_sample_idx = random.randint(0, num_test_samples - 1)
-        x = self.test_dataset[random_test_sample_idx].unsqueeze(0).to(self.device)
+        x, label = self.test_dataset[random_test_sample_idx]
+        x = x.unsqueeze(0).to(self.device)
+        label = label.unsqueeze(0).to(self.device)
+        print(f"sample label: {label}")
         with torch.no_grad():
             latent = self.vae.encode(x)
             print("latent shape:", latent.shape)
@@ -185,7 +202,8 @@ class Trainer:
                 self.latent_shape = latent.shape
             t = 100
             latent_noisy, t_b, noise = self.diffuser.create_noised_image(latent, t=t)
-            predicted_noise = self.diffuser(latent_noisy)
+            context = self.text_encoder(label)
+            predicted_noise = self.diffuser(latent_noisy, context=context)
             predicted_latent_0 = latent_noisy - predicted_noise
             x_p = self.vae.decode(predicted_latent_0)
         wandb.log({
@@ -196,9 +214,15 @@ class Trainer:
 
     def _generate(self, step: int):
         with torch.no_grad():
+            # random_label = torch.randint(0, 5, (1,1)).to(self.device)
+            # hardcode random label to be 2.
+            random_label = torch.tensor([[2]]).to(self.device)
+            print(f"random_label: {random_label}")
+            context = self.text_encoder(random_label)
             latent = self.diffuser.generate(
                 # torch.randn(1, 64, 8, 4, 4).to(self.device),
                 torch.randn(1, *self.latent_shape[1:]).to(self.device),
+                context=context,
             )
             intermediates = [
                 self.vae.decode(latent)[0].clone()
@@ -238,6 +262,7 @@ class Trainer:
         checkpoint_dir.mkdir(exist_ok=True, parents=True)
         torch.save(self.diffuser.state_dict(), str(checkpoint_dir / f"diffuser_at_step_{step}.pth"))
         torch.save(self.vae.state_dict(), str(checkpoint_dir / f"vae_at_step_{step}.pth"))
+        torch.save(self.text_encoder.state_dict(), str(checkpoint_dir / f"text_encoder_at_step_{step}.pth"))
 
 
 if __name__ == "__main__":

@@ -27,10 +27,13 @@ class TinyDiffuser(torch.nn.Module):
     def total_timesteps(self) -> int:
         return self.noise_scheduler.num_timesteps
 
-    def forward(self, x):
+    def forward(self, x, context: Optional[torch.Tensor] = None):
         # input: signal,
         # output: predicted noise.
         # x, multichannel.
+        if context is not None:
+            assert context.shape == x.shape, f"Expected {x.shape} and {context.shape} to match."
+            x = x + context # Trivial combination for now, since context is trivial.
         latent = self.conv_in(x)
         # consider this a residual.
         d = self.conv_mid(latent)
@@ -57,13 +60,13 @@ class TinyDiffuser(torch.nn.Module):
             noise,
         )
 
-    def generate(self, example_x: torch.Tensor) -> torch.Tensor:
+    def generate(self, example_x: torch.Tensor, context: Optional[torch.Tensor] = None) -> torch.Tensor:
         b = example_x.shape[0]
         sampling_timesteps = self.noise_scheduler._get_sampling_timesteps(b, device=example_x.device)
         img = torch.randn_like(example_x)
         with torch.no_grad():
             for t in tqdm(sampling_timesteps, desc="Generating video"):
-                predicted_noise = self(img)
+                predicted_noise = self(img, context)
                 # x_0 = self.noise_scheduler.predict_start_from_noise(
                 #     x_t = img,
                 #     t = t,

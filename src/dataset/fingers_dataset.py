@@ -33,10 +33,24 @@ class FingersDataset:
     def __len__(self) -> int:
         return len(self.video_paths)
 
-    def __getitem__(self, idx: int) -> torch.Tensor:
-        return self._preprocess_video(
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        video_data = self._preprocess_video(
             video_data=self._get_video_data(idx),
         )
+        video_path = self.video_paths[idx]
+        if video_path.stem == "one":
+            label = torch.tensor(0)
+        elif video_path.stem == "two":
+            label = torch.tensor(1)
+        elif video_path.stem == "three":
+            label = torch.tensor(2)
+        elif video_path.stem == "four":
+            label = torch.tensor(3)
+        elif video_path.stem == "five":
+            label = torch.tensor(4)
+        else:
+            raise ValueError(f"Unknown video path: {video_path}")
+        return video_data, label
 
     def _get_video_data(self, idx) -> torch.Tensor:
         video_path = self.video_paths[idx]
